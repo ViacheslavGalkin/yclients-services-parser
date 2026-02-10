@@ -775,10 +775,9 @@ if (NODE_ENV === 'production') {
     // Устанавливаем вебхук
     const setWebhook = async () => {
         try {
-            // Render дает свой URL через переменную окружения
             const webhookUrl = process.env.RENDER_EXTERNAL_URL 
-                ? `https://${process.env.RENDER_EXTERNAL_URL}/bot${BOT_TOKEN}`
-                : `https://telegram-yclients-bot.onrender.com/bot${BOT_TOKEN}`;
+                ? `${process.env.RENDER_EXTERNAL_URL}/bot${BOT_TOKEN}`
+                : `https://yclients-services-parser.onrender.com/bot${BOT_TOKEN}`;
             
             await bot.setWebHook(webhookUrl);
             console.log(`✅ Webhook установлен: ${webhookUrl}`);
