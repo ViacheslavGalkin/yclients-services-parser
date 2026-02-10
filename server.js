@@ -11,6 +11,15 @@ const PARTNER_TOKEN = process.env.PARTNER_TOKEN;
 const USER_TOKEN = process.env.USER_TOKEN;
 const PORT = process.env.PORT || 3000;
 
+// Лимиты API YClients
+const API_LIMITS = {
+    REQUESTS_PER_SECOND: 4, // 5 запросов в секунду, берем 4 для надежности
+    REQUESTS_PER_MINUTE: 180, // 200 запросов в минуту, берем 180 для надежности
+    DELAY_BETWEEN_REQUESTS: 250, // 250ms между запросами (4 запроса в секунду)
+    BATCH_SIZE: 50, // Размер пачки для обработки
+    TIMEOUT: 10000 // 10 секунд таймаут
+};
+
 // Создаем папку для временных файлов
 const TEMP_DIR = path.join(__dirname, 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
@@ -24,6 +33,9 @@ const bot = new TelegramBot(BOT_TOKEN, {
 
 // Состояния пользователей
 const userStates = new Map();
+
+// Кэш категорий для уменьшения запросов к API
+const categoryCache = new Map();
 
 // Функция для сброса состояния пользователя
 function resetUserState(chatId) {
@@ -46,7 +58,7 @@ function sendWelcomeMessage(chatId, username, isFirstTime = true) {
 
 2. Я извлеку ID компании и получу все услуги через API
 
-3. Создам Excel файл с услугами и ценами
+3. Создам Excel файл с услугами, категориями и ценами
 
 ⏳ Ожидаю ссылку...`
         : `👋 С возвращением, ${username}!`;
@@ -87,7 +99,8 @@ https://n1960732.yclients.com/company/1726633/personal/menu?o=
 ✅ Извлекает ID компании из ссылки
 ✅ Делает запрос к API YClients
 ✅ Получает список всех услуг
-✅ Создает Excel файл с услугами и ценами
+✅ Получает категории для каждой услуги
+✅ Создает Excel файл с услугами, категориями и ценами
 ✅ Отправляет файл вам
 
 Доступные команды:
@@ -114,6 +127,9 @@ bot.onText(/\/status/, (msg) => {
         statusText += "🔄 Нажмите /start чтобы начать";
     }
     
+    // Добавляем статистику кэша
+    statusText += `\n\n📦 Кэш категорий: ${categoryCache.size}`;
+    
     bot.sendMessage(chatId, statusText);
 });
 
@@ -124,6 +140,15 @@ bot.onText(/\/reset/, (msg) => {
     
     resetUserState(chatId);
     bot.sendMessage(chatId, `✅ Состояние сброшено, ${username}!\n\nТеперь я снова ожидаю ссылку на компанию YClients.`);
+});
+
+// Команда для очистки кэша (для админов)
+bot.onText(/\/clearcache/, (msg) => {
+    const chatId = msg.chat.id;
+    const cacheSize = categoryCache.size;
+    
+    categoryCache.clear();
+    bot.sendMessage(chatId, `🧹 Кэш категорий очищен! Удалено ${cacheSize} записей.`);
 });
 
 // Обработка текстовых сообщений
@@ -186,10 +211,15 @@ bot.on('message', async (msg) => {
                 return;
             }
             
-            bot.sendMessage(chatId, `✅ Получено услуг: ${services.length}\n\n⏳ Создаю Excel файл...`);
+            bot.sendMessage(chatId, `✅ Получено услуг: ${services.length}\n\n⏳ Получаю категории услуг...`);
+            
+            // Получаем категории для каждой услуги с учетом лимитов API
+            const servicesWithCategories = await fetchCategoriesForServices(services, companyId, chatId);
+            
+            bot.sendMessage(chatId, `✅ Получено категорий: ${servicesWithCategories.filter(s => s.category_name).length}\n\n⏳ Создаю Excel файл...`);
             
             // Создаем Excel файл
-            const excelFilePath = await createExcelFile(services, companyId);
+            const excelFilePath = await createExcelFile(servicesWithCategories, companyId);
             
             // Отправляем файл
             await sendExcelFile(chatId, excelFilePath, companyId);
@@ -270,7 +300,7 @@ async function fetchServicesFromYclients(companyId) {
     console.log(`Запрос услуг с: ${url}`);
     
     try {
-        const response = await axios.get(url, { headers, timeout: 10000 });
+        const response = await axios.get(url, { headers, timeout: API_LIMITS.TIMEOUT });
         
         if (response.data.success && response.data.data) {
             return response.data.data;
@@ -286,14 +316,163 @@ async function fetchServicesFromYclients(companyId) {
     }
 }
 
+// Функция для получения категорий услуг с учетом лимитов API
+async function fetchCategoriesForServices(services, companyId, chatId) {
+    const servicesWithCategories = [...services];
+    const uniqueCategoryIds = new Set();
+    
+    // Собираем уникальные category_id
+    services.forEach(service => {
+        if (service.category_id) {
+            uniqueCategoryIds.add(service.category_id);
+        }
+    });
+    
+    console.log(`Всего уникальных категорий для получения: ${uniqueCategoryIds.size}`);
+    
+    // Отправляем сообщение о начале загрузки категорий
+    if (chatId && uniqueCategoryIds.size > 0) {
+        await bot.sendMessage(chatId, `📥 Получаю ${uniqueCategoryIds.size} категорий...\n⏳ Это может занять некоторое время.`);
+    } else if (chatId) {
+        await bot.sendMessage(chatId, `✅ Нет категорий для получения.`);
+        // Добавляем категории к услугам
+        servicesWithCategories.forEach(service => {
+            service.category_name = 'Без категории';
+        });
+        return servicesWithCategories;
+    }
+    
+    // Получаем категории пачками с задержками
+    const categoryIdsArray = Array.from(uniqueCategoryIds);
+    const categories = new Map();
+    
+    // Разбиваем на пачки
+    const batches = [];
+    for (let i = 0; i < categoryIdsArray.length; i += API_LIMITS.BATCH_SIZE) {
+        batches.push(categoryIdsArray.slice(i, i + API_LIMITS.BATCH_SIZE));
+    }
+    
+    console.log(`Разбито на ${batches.length} пачек по ${API_LIMITS.BATCH_SIZE} категорий`);
+    
+    // Обрабатываем каждую пачку
+    let processedCount = 0;
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        
+        // Создаем промисы для текущей пачки
+        const promises = batch.map((categoryId, index) => {
+            // Задержка между запросами в пачке
+            const delay = index * API_LIMITS.DELAY_BETWEEN_REQUESTS;
+            
+            return new Promise(resolve => {
+                setTimeout(async () => {
+                    try {
+                        const categoryName = await fetchCategoryById(companyId, categoryId);
+                        resolve({ categoryId, categoryName });
+                    } catch (error) {
+                        console.error(`Ошибка получения категории ${categoryId}:`, error.message);
+                        resolve({ categoryId, categoryName: null });
+                    }
+                }, delay);
+            });
+        });
+        
+        // Ждем выполнения текущей пачки
+        const batchResults = await Promise.all(promises);
+        
+        // Сохраняем результаты
+        batchResults.forEach(result => {
+            categories.set(result.categoryId, result.categoryName);
+        });
+        
+        processedCount += batch.length;
+        
+        // Отправляем прогресс каждые 20% или каждые 50 категорий
+        if (chatId && (processedCount % 50 === 0 || batchIndex === batches.length - 1)) {
+            const percent = Math.round((processedCount / uniqueCategoryIds.size) * 100);
+            try {
+                await bot.sendMessage(chatId, `📊 Прогресс: ${percent}% (${processedCount}/${uniqueCategoryIds.size})`);
+            } catch (error) {
+                console.error('Ошибка отправки прогресса:', error.message);
+            }
+        }
+        
+        // Задержка между пачками (1 секунда для надежности)
+        if (batchIndex < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    }
+    
+    // Добавляем категории к услугам
+    servicesWithCategories.forEach(service => {
+        if (service.category_id && categories.has(service.category_id)) {
+            service.category_name = categories.get(service.category_id);
+        } else {
+            service.category_name = 'Без категории';
+        }
+    });
+    
+    return servicesWithCategories;
+}
+
+// Функция для получения категории по ID с кэшированием
+async function fetchCategoryById(companyId, categoryId) {
+    // Проверяем кэш
+    const cacheKey = `${companyId}_${categoryId}`;
+    if (categoryCache.has(cacheKey)) {
+        return categoryCache.get(cacheKey);
+    }
+    const url = `https://api.yclients.com/api/v1/service_category/${companyId}/${categoryId}`;
+    
+    const headers = {
+        'Accept': 'application/vnd.yclients.v2+json',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${PARTNER_TOKEN}`
+    };
+    
+    try {
+        const response = await axios.get(url, { 
+            headers, 
+            timeout: API_LIMITS.TIMEOUT 
+        });
+        
+        if (response.data.success && response.data.data) {
+            const categoryName = response.data.data.title || 'Без названия';
+            // Сохраняем в кэш
+            categoryCache.set(cacheKey, categoryName);
+            
+            // Ограничиваем размер кэша
+            if (categoryCache.size > 1000) {
+                const firstKey = categoryCache.keys().next().value;
+                categoryCache.delete(firstKey);
+            }
+            
+            return categoryName;
+        } else {
+            throw new Error('Ответ API указывает на ошибку');
+        }
+    } catch (error) {
+        // Если ошибка 404 (категория не найдена), возвращаем значение по умолчанию
+        if (error.response && error.response.status === 404) {
+            const defaultName = 'Категория не найдена';
+            categoryCache.set(cacheKey, defaultName);
+            return defaultName;
+        }
+        
+        console.error(`Ошибка получения категории ${categoryId} для компании ${companyId}:`, error.message);
+        throw error;
+    }
+}
+
 // Функция для создания Excel файла
 async function createExcelFile(services, companyId) {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Услуги');
     
-    // Настраиваем заголовки
+    // Настраиваем заголовки (добавили колонку "Категория" на второе место)
     worksheet.columns = [
         { header: 'ID услуги', key: 'id', width: 15 },
+        { header: 'Категория', key: 'category', width: 30 },
         { header: 'Услуга', key: 'title', width: 50 },
         { header: 'Минимальная цена (руб)', key: 'price_min', width: 25 },
         { header: 'Максимальная цена (руб)', key: 'price_max', width: 25 },
@@ -319,6 +498,7 @@ async function createExcelFile(services, companyId) {
     services.forEach(service => {
         worksheet.addRow({
             id: service.id,
+            category: service.category_name || 'Без категории',
             title: service.title || 'Без названия',
             price_min: service.price_min || 0,
             price_max: service.price_max || service.price_min || 0,
@@ -333,12 +513,15 @@ async function createExcelFile(services, companyId) {
         });
     });
     
-    // Форматируем ячейки с ценами
+    // Форматируем ячейки с ценами (теперь с D по M, т.к. добавили колонку "Категория")
     for (let i = 2; i <= services.length + 1; i++) {
-        ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].forEach(col => {
+        ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'].forEach(col => {
             worksheet.getCell(`${col}${i}`).numFmt = '#,##0 ₽';
         });
     }
+    
+    // Добавляем группировку по категориям
+    const categories = [...new Set(services.map(s => s.category_name || 'Без категории'))];
     
     // Добавляем итоговую строку
     const lastRow = services.length + 3;
@@ -346,16 +529,29 @@ async function createExcelFile(services, companyId) {
     worksheet.getCell(`A${lastRow}`).value = 'ИТОГО УСЛУГ:';
     worksheet.getCell(`A${lastRow}`).font = { bold: true };
     
-    worksheet.getCell(`B${lastRow}`).value = services.length;
-    worksheet.getCell(`B${lastRow}`).font = { bold: true };
+    worksheet.getCell(`C${lastRow}`).value = services.length;
+    worksheet.getCell(`C${lastRow}`).font = { bold: true };
     
-    // Добавляем статистику
-    worksheet.getCell(`A${lastRow + 1}`).value = 'АКТИВНЫХ УСЛУГ:';
-    worksheet.getCell(`A${lastRow + 1}`).font = { bold: true };
+    // Добавляем статистику по категориям
+    let categoryRow = lastRow + 2;
+    worksheet.getCell(`A${categoryRow}`).value = 'СТАТИСТИКА ПО КАТЕГОРИЯМ:';
+    worksheet.getCell(`A${categoryRow}`).font = { bold: true };
     
-    const activeServices = services.filter(s => s.active === 1).length;
-    worksheet.getCell(`B${lastRow + 1}`).value = activeServices;
-    worksheet.getCell(`B${lastRow + 1}`).font = { bold: true };
+    categories.forEach(category => {
+        categoryRow++;
+        const servicesInCategory = services.filter(s => (s.category_name || 'Без категории') === category).length;
+        worksheet.getCell(`A${categoryRow}`).value = category;
+        worksheet.getCell(`B${categoryRow}`).value = servicesInCategory;
+        
+        // Выделяем категории цветом
+        if (category === 'Без категории') {
+            worksheet.getCell(`A${categoryRow}`).fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFFFCCCC' }
+            };
+        }
+    });
     
     // Автофильтр
     worksheet.autoFilter = {
@@ -397,13 +593,12 @@ async function sendExcelFile(chatId, filePath, companyId) {
 
 ✅ Файл готов к скачиванию!`;
         
-        // Отправляем файл как поток (stream)
-        const fileStream = fs.createReadStream(filePath);
+        // Читаем файл в Buffer
+        const fileBuffer = fs.readFileSync(filePath);
         
-        await bot.sendDocument(chatId, fileStream, {}, {
+        // Отправляем файл как Buffer
+        await bot.sendDocument(chatId, fileBuffer, {
             filename: `services_${companyId}.xlsx`,
-            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        }, {
             caption: caption
         });
         
@@ -414,7 +609,6 @@ async function sendExcelFile(chatId, filePath, companyId) {
         throw error;
     }
 }
-
 // Очистка старых временных файлов (раз в час)
 setInterval(() => {
     try {
@@ -443,9 +637,21 @@ setInterval(() => {
 // Очистка старых состояний пользователей (раз в сутки)
 setInterval(() => {
     const now = Date.now();
-    const maxStateAge = 24 * 60 * 60 * 1000; // 24 часа
-    console.log(`Текущее количество пользователей в памяти: ${userStates.size}`);
+    console.log(`📊 Статистика:
+    Пользователей в памяти: ${userStates.size}
+    Категорий в кэше: ${categoryCache.size}`);
 }, 24 * 60 * 60 * 1000); // Каждые 24 часа
+
+// Очистка кэша категорий (раз в 6 часов)
+setInterval(() => {
+    const cacheSize = categoryCache.size;
+    if (cacheSize > 500) {
+        // Очищаем половину кэша
+        const keysToDelete = Array.from(categoryCache.keys()).slice(0, Math.floor(cacheSize / 2));
+        keysToDelete.forEach(key => categoryCache.delete(key));
+        console.log(`🧹 Очищена половина кэша категорий. Было: ${cacheSize}, стало: ${categoryCache.size}`);
+    }
+}, 6 * 60 * 60 * 1000); // Каждые 6 часов
 
 // Обработка ошибок
 bot.on('polling_error', (error) => {
@@ -469,6 +675,10 @@ process.on('unhandledRejection', (reason, promise) => {
 console.log('🤖 Бот запущен и ожидает сообщений...');
 console.log('📝 Пользователи могут сразу отправлять ссылки без /start');
 console.log('📁 Временные файлы хранятся в:', TEMP_DIR);
+console.log('⚡ Лимиты API настроены:');
+console.log(`   • ${API_LIMITS.REQUESTS_PER_SECOND} запросов в секунду`);
+console.log(`   • ${API_LIMITS.REQUESTS_PER_MINUTE} запросов в минуту`);
+console.log(`   • Задержка между запросами: ${API_LIMITS.DELAY_BETWEEN_REQUESTS}ms`);
 
 // Для веб-версии (если нужно развернуть на хостинге)
 if (process.env.NODE_ENV === 'production') {
@@ -483,6 +693,7 @@ if (process.env.NODE_ENV === 'production') {
             status: 'online',
             bot: 'running',
             users: userStates.size,
+            categoriesCache: categoryCache.size,
             timestamp: new Date().toISOString()
         });
     });
@@ -493,9 +704,21 @@ if (process.env.NODE_ENV === 'production') {
             bot: 'YClint Services Bot',
             version: '1.0.0',
             activeUsers: userStates.size,
+            categoriesCache: categoryCache.size,
             uptime: process.uptime(),
             tempFiles: fs.readdirSync(TEMP_DIR).length,
-            memory: process.memoryUsage()
+            memory: process.memoryUsage(),
+            apiLimits: API_LIMITS
+        });
+    });
+    
+    // Очистка кэша
+    app.get('/clearcache', (req, res) => {
+        const cacheSize = categoryCache.size;
+        categoryCache.clear();
+        res.json({
+            success: true,
+            message: `Кэш очищен. Удалено ${cacheSize} записей.`
         });
     });
     
