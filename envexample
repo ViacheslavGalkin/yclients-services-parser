@@ -1,0 +1,4 @@
+BOT_TOKEN= токен бота
+PARTNER_TOKEN= токен партнера yclients
+USER_TOKEN= токен пользователя yclients
+PORT=3000

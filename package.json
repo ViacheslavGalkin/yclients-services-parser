@@ -1,0 +1,19 @@
+{
+  "name": "yclients_company_parser",
+  "version": "1.0.0",
+  "description": "Бот для получения услуг из YClients",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "dotenv": "^16.0.0",
+    "axios": "^1.6.0",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
