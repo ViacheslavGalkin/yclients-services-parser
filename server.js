@@ -207,7 +207,7 @@ bot.on('message', async (msg) => {
         }
         
         try {
-            const companyId = extractCompanyId(text);
+            const companyId = await extractCompanyId(text);
             
             if (!companyId) {
                 bot.sendMessage(chatId, "❌ Не удалось извлечь ID компании из ссылки. Проверьте формат ссылки.\n\nУбедитесь, что ссылка содержит \"/company/цифры/\"");
@@ -281,10 +281,34 @@ function isValidUrl(text) {
 }
 
 // Функция для извлечения ID компании
-function extractCompanyId(url) {
+async function extractCompanyId(url) {
     try {
         const match = url.match(/\/company\/(\d+)\//);
-        return match ? match[1] : null;
+        if (match) {
+            return match[1];
+        } else {
+            const matchVar2 = url.match(/\/([a-z])(\d+)\.yclients\.com/);
+            const result = matchVar2 ? matchVar2[2] : null;
+            const urlForm = `https://api.yclients.com/api/v1/bookform/${result}`;
+    
+            const headers = {
+                'Accept': 'application/vnd.yclients.v2+json',
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${PARTNER_TOKEN}`
+            };
+
+            try {
+                const response = await axios.get(urlForm, { headers, timeout: API_LIMITS.TIMEOUT });
+                if (response.data.success && response.data.data) {
+                    return response.data.data.company_id;
+                } else {
+                    throw new Error('Ответ API указывает на ошибку');
+                }
+            } catch (error) {
+                console.error('Ошибка запроса формы:', error);
+                return null;
+            }
+        }
     } catch (error) {
         console.error('Ошибка извлечения ID компании:', error);
         return null;
