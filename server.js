@@ -273,7 +273,12 @@ bot.on('message', async (msg) => {
 // Функция для проверки URL
 function isValidUrl(text) {
     try {
-        const url = new URL(text);
+        if (typeof text !== 'string') return false;
+        
+        let str = text.trim();
+        if (!str.startsWith('http')) str = 'https://' + str;
+        
+        const url = new URL(str);
         return url.hostname.includes('yclients.com');
     } catch {
         return false;
@@ -281,36 +286,47 @@ function isValidUrl(text) {
 }
 
 // Функция для извлечения ID компании
-async function extractCompanyId(url) {
+async function extractCompanyId(userInput) {
     try {
-        const match = url.match(/\/company\/(\d+)\//);
-        if (match) {
-            return match[1];
-        } else {
-            const matchVar2 = url.match(/\/([a-z])(\d+)\.yclients\.com/);
-            const result = matchVar2 ? matchVar2[2] : null;
-            const urlForm = `https://api.yclients.com/api/v1/bookform/${result}`;
-    
-            const headers = {
-                'Accept': 'application/vnd.yclients.v2+json',
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${PARTNER_TOKEN}`
-            };
-
-            try {
-                const response = await axios.get(urlForm, { headers, timeout: API_LIMITS.TIMEOUT });
-                if (response.data.success && response.data.data) {
-                    return response.data.data.company_id;
-                } else {
-                    throw new Error('Ответ API указывает на ошибку');
-                }
-            } catch (error) {
-                console.error('Ошибка запроса формы:', error);
-                return null;
-            }
+        if (typeof userInput !== 'string') return null;
+        
+        // 1. Нормализуем URL как в isValidUrl
+        let str = userInput.trim();
+        if (!str.startsWith('http')) str = 'https://' + str;
+        
+        // 2. Пробуем сразу вытащить company_id из ссылки
+        const companyMatch = str.match(/\/company\/(\d+)\//);
+        if (companyMatch) {
+            return companyMatch[1];
         }
+        
+        // 3. Если нет /company/ID — извлекаем subdomain (буква + цифры)
+        const subdomainMatch = str.match(/\/([a-z])(\d+)\.yclients\.com/);
+        if (!subdomainMatch) return null;
+        
+        const accountId = subdomainMatch[2];
+        
+        // 4. Запрашиваем bookform
+        const urlForm = `https://api.yclients.com/api/v1/bookform/${accountId}`;
+        const headers = {
+            'Accept': 'application/vnd.yclients.v2+json',
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${PARTNER_TOKEN}`
+        };
+
+        const response = await axios.get(urlForm, { 
+            headers, 
+            timeout: API_LIMITS.TIMEOUT 
+        });
+        
+        if (response.data.success && response.data.data?.company_id) {
+            return response.data.data.company_id;
+        }
+        
+        return null;
+        
     } catch (error) {
-        console.error('Ошибка извлечения ID компании:', error);
+        console.error('Ошибка извлечения ID компании:', error.message);
         return null;
     }
 }
@@ -505,20 +521,49 @@ async function createExcelFile(services, companyId) {
     };
     
     services.forEach(service => {
+        let basePriceMin = service.price_min || 0;
+        let basePriceMax = service.price_max || service.price_min || 0;
+
+            if (service.staff && Array.isArray(service.staff) && service.staff.length > 0) {
+            service.staff.forEach(staff => {
+                if (staff.price) {
+                    let staffPriceMax = null;
+                    if (typeof staff.price === 'object' && staff.price !== null) {
+                        staffPriceMax = staff.price.max;
+                    } else if (typeof staff.price === 'string' || typeof staff.price === 'number') {
+                        const parsedPrice = Number(staff.price);
+                        if (!isNaN(parsedPrice)) {
+                            staffPriceMax = parsedPrice;
+                        }
+                    }
+                
+                    if (staffPriceMax !== null && !isNaN(staffPriceMax)) {
+                        const numericPrice = Number(staffPriceMax);
+                        if (numericPrice > basePriceMax) {
+                            basePriceMax = numericPrice;
+                            console.log(`Найдена более высокая цена ${numericPrice} у сотрудника ${staff.name || 'без имени'}`);
+                        }
+                    }
+                }
+            });
+        }
+
+        service.price_max = Number(basePriceMax) || 0;
+
         worksheet.addRow({
             id: service.id,
             category: service.category_name || 'Без категории',
             title: service.title || 'Без названия',
             price_min: service.price_min || 0,
             price_max: service.price_max || service.price_min || 0,
-            price_min60: Math.round(Number(service.price_min) * 0.6) || 0,
-            price_max60: Math.round(Number(service.price_max) * 0.6) || Math.round(Number(service.price_min) * 0.6) || 0,
-            price_min65: Math.round(Number(service.price_min) * 0.65) || 0,
-            price_max65: Math.round(Number(service.price_max) * 0.65) || Math.round(Number(service.price_min) * 0.65) || 0,
-            price_min70: Math.round(Number(service.price_min) * 0.70) || 0,
-            price_max70: Math.round(Number(service.price_max) * 0.70) || Math.round(Number(service.price_min) * 0.70) || 0,
-            price_min75: Math.round(Number(service.price_min) * 0.75) || 0,
-            price_max75: Math.round(Number(service.price_max) * 0.75) || Math.round(Number(service.price_min) * 0.75) || 0,
+            price_min60: Math.ceil(Number(service.price_min) * 0.6) || 0,
+            price_max60: Math.ceil(Number(service.price_max) * 0.6) || Math.ceil(Number(service.price_min) * 0.6) || 0,
+            price_min65: Math.ceil(Number(service.price_min) * 0.65) || 0,
+            price_max65: Math.ceil(Number(service.price_max) * 0.65) || Math.ceil(Number(service.price_min) * 0.65) || 0,
+            price_min70: Math.ceil(Number(service.price_min) * 0.70) || 0,
+            price_max70: Math.ceil(Number(service.price_max) * 0.70) || Math.ceil(Number(service.price_min) * 0.70) || 0,
+            price_min75: Math.ceil(Number(service.price_min) * 0.75) || 0,
+            price_max75: Math.ceil(Number(service.price_max) * 0.75) || Math.ceil(Number(service.price_min) * 0.75) || 0,
         });
     });
     
