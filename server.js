@@ -345,9 +345,8 @@ async function fetchServicesFromYclients(companyId) {
     
     try {
         const response = await axios.get(url, { headers, timeout: API_LIMITS.TIMEOUT });
-        
         if (response.data.success && response.data.data) {
-            return response.data.data.filter((el) => el.active === 1);
+            return response.data.data.filter((el) => el.active === 1 && el.staff?.length > 0);
         } else {
             throw new Error('Ответ API указывает на ошибку');
         }
