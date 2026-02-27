@@ -499,7 +499,7 @@ async function createExcelFile(services, companyId) {
     worksheet.columns = [
         { header: 'ID услуги', key: 'id', width: 15 },
         { header: 'Категория', key: 'category', width: 30 },
-        { header: 'Услуга', key: 'title', width: 50 },
+        { header: 'Услуга', key: 'booking_title', width: 50 },
         { header: 'Минимальная цена (руб)', key: 'price_min', width: 25 },
         { header: 'Максимальная цена (руб)', key: 'price_max', width: 25 },
         { header: 'Минимальная цена 60% (руб)', key: 'price_min60', width: 25 },
@@ -510,6 +510,7 @@ async function createExcelFile(services, companyId) {
         { header: 'Максимальная цена 70% (руб)', key: 'price_max70', width: 25 },
         { header: 'Минимальная цена 75% (руб)', key: 'price_min75', width: 25 },
         { header: 'Максимальная цена 75% (руб)', key: 'price_max75', width: 25 },
+        { header: 'Длительность услуги', key: 'duration', width: 15 },
     ];
     
     worksheet.getRow(1).font = { bold: true };
@@ -552,7 +553,7 @@ async function createExcelFile(services, companyId) {
         worksheet.addRow({
             id: service.id,
             category: service.category_name || 'Без категории',
-            title: service.title || 'Без названия',
+            booking_title: service.booking_title || 'Без названия',
             price_min: service.price_min || 0,
             price_max: service.price_max || service.price_min || 0,
             price_min60: Math.ceil(Number(service.price_min) * 0.6) || 0,
@@ -563,6 +564,7 @@ async function createExcelFile(services, companyId) {
             price_max70: Math.ceil(Number(service.price_max) * 0.70) || Math.ceil(Number(service.price_min) * 0.70) || 0,
             price_min75: Math.ceil(Number(service.price_min) * 0.75) || 0,
             price_max75: Math.ceil(Number(service.price_max) * 0.75) || Math.ceil(Number(service.price_min) * 0.75) || 0,
+            duration: service?.duration / 60 || 0
         });
     });
     
