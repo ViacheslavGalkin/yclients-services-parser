@@ -549,11 +549,10 @@ async function createExcelFile(services, companyId) {
         }
 
         service.price_max = Number(basePriceMax) || 0;
-
         worksheet.addRow({
             id: service.id,
             category: service.category_name || 'Без категории',
-            booking_title: service.booking_title || 'Без названия',
+            booking_title: service.booking_title || service.title || 'Без названия',
             price_min: service.price_min || 0,
             price_max: service.price_max || service.price_min || 0,
             price_min60: Math.ceil(Number(service.price_min) * 0.6) || 0,
