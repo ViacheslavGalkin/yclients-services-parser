@@ -227,7 +227,8 @@ bot.on('message', async (msg) => {
             
             bot.sendMessage(chatId, `✅ Получено услуг: ${services.length}\n\n⏳ Получаю категории услуг...`);
             
-            const servicesWithCategories = await fetchCategoriesForServices(services, companyId, chatId);
+            // const servicesWithCategories = await fetchCategoriesForServices(services, companyId, chatId);
+            const servicesWithCategories = addCategoriesToServices(services);
             
             bot.sendMessage(chatId, `✅ Получено категорий: ${servicesWithCategories.filter(s => s.category_name).length}\n\n⏳ Создаю Excel файл...`);
             
@@ -333,7 +334,8 @@ async function extractCompanyId(userInput) {
 
 // Функция для получения услуг из YClients API
 async function fetchServicesFromYclients(companyId) {
-    const url = `https://api.yclients.com/api/v1/company/${companyId}/services`;
+    // const url = `https://api.yclients.com/api/v1/company/${companyId}/services`;
+    const url = `https://api.yclients.com/api/v1/book_services/${companyId}`;
     
     const headers = {
         'Accept': 'application/vnd.yclients.v2+json',
@@ -346,7 +348,8 @@ async function fetchServicesFromYclients(companyId) {
     try {
         const response = await axios.get(url, { headers, timeout: API_LIMITS.TIMEOUT });
         if (response.data.success && response.data.data) {
-            return response.data.data.filter((el) => el.active === 1 && el.staff?.length > 0);
+            // return response.data.data.filter((el) => el.active === 1 && el.staff?.length > 0);
+            return response.data.data;
         } else {
             throw new Error('Ответ API указывает на ошибку');
         }
@@ -360,89 +363,101 @@ async function fetchServicesFromYclients(companyId) {
 }
 
 // Функция для получения категорий услуг с учетом лимитов API
-async function fetchCategoriesForServices(services, companyId, chatId) {
-    const servicesWithCategories = [...services];
-    const uniqueCategoryIds = new Set();
+// async function fetchCategoriesForServices(services, companyId, chatId) {
+//     const servicesWithCategories = [...services];
+//     const uniqueCategoryIds = new Set();
     
-    services.forEach(service => {
-        if (service.category_id) {
-            uniqueCategoryIds.add(service.category_id);
-        }
-    });
+//     services.forEach(service => {
+//         if (service.category_id) {
+//             uniqueCategoryIds.add(service.category_id);
+//         }
+//     });
     
-    console.log(`Всего уникальных категорий для получения: ${uniqueCategoryIds.size}`);
+//     console.log(`Всего уникальных категорий для получения: ${uniqueCategoryIds.size}`);
     
-    if (chatId && uniqueCategoryIds.size > 0) {
-        await bot.sendMessage(chatId, `📥 Получаю ${uniqueCategoryIds.size} категорий...\n⏳ Это может занять некоторое время.`);
-    } else if (chatId) {
-        await bot.sendMessage(chatId, `✅ Нет категорий для получения.`);
-        servicesWithCategories.forEach(service => {
-            service.category_name = 'Без категории';
-        });
-        return servicesWithCategories;
-    }
+//     if (chatId && uniqueCategoryIds.size > 0) {
+//         await bot.sendMessage(chatId, `📥 Получаю ${uniqueCategoryIds.size} категорий...\n⏳ Это может занять некоторое время.`);
+//     } else if (chatId) {
+//         await bot.sendMessage(chatId, `✅ Нет категорий для получения.`);
+//         servicesWithCategories.forEach(service => {
+//             service.category_name = 'Без категории';
+//         });
+//         return servicesWithCategories;
+//     }
     
-    const categoryIdsArray = Array.from(uniqueCategoryIds);
-    const categories = new Map();
+//     const categoryIdsArray = Array.from(uniqueCategoryIds);
+//     const categories = new Map();
     
-    const batches = [];
-    for (let i = 0; i < categoryIdsArray.length; i += API_LIMITS.BATCH_SIZE) {
-        batches.push(categoryIdsArray.slice(i, i + API_LIMITS.BATCH_SIZE));
-    }
+//     const batches = [];
+//     for (let i = 0; i < categoryIdsArray.length; i += API_LIMITS.BATCH_SIZE) {
+//         batches.push(categoryIdsArray.slice(i, i + API_LIMITS.BATCH_SIZE));
+//     }
     
-    console.log(`Разбито на ${batches.length} пачек по ${API_LIMITS.BATCH_SIZE} категорий`);
+//     console.log(`Разбито на ${batches.length} пачек по ${API_LIMITS.BATCH_SIZE} категорий`);
     
-    let processedCount = 0;
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
+//     let processedCount = 0;
+//     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+//         const batch = batches[batchIndex];
         
-        const promises = batch.map((categoryId, index) => {
-            const delay = index * API_LIMITS.DELAY_BETWEEN_REQUESTS;
+//         const promises = batch.map((categoryId, index) => {
+//             const delay = index * API_LIMITS.DELAY_BETWEEN_REQUESTS;
             
-            return new Promise(resolve => {
-                setTimeout(async () => {
-                    try {
-                        const categoryName = await fetchCategoryById(companyId, categoryId);
-                        resolve({ categoryId, categoryName });
-                    } catch (error) {
-                        console.error(`Ошибка получения категории ${categoryId}:`, error.message);
-                        resolve({ categoryId, categoryName: null });
-                    }
-                }, delay);
-            });
-        });
+//             return new Promise(resolve => {
+//                 setTimeout(async () => {
+//                     try {
+//                         const categoryName = await fetchCategoryById(companyId, categoryId);
+//                         resolve({ categoryId, categoryName });
+//                     } catch (error) {
+//                         console.error(`Ошибка получения категории ${categoryId}:`, error.message);
+//                         resolve({ categoryId, categoryName: null });
+//                     }
+//                 }, delay);
+//             });
+//         });
         
-        const batchResults = await Promise.all(promises);
+//         const batchResults = await Promise.all(promises);
         
-        batchResults.forEach(result => {
-            categories.set(result.categoryId, result.categoryName);
-        });
+//         batchResults.forEach(result => {
+//             categories.set(result.categoryId, result.categoryName);
+//         });
         
-        processedCount += batch.length;
+//         processedCount += batch.length;
         
-        if (chatId && (processedCount % 50 === 0 || batchIndex === batches.length - 1)) {
-            const percent = Math.round((processedCount / uniqueCategoryIds.size) * 100);
-            try {
-                await bot.sendMessage(chatId, `📊 Прогресс: ${percent}% (${processedCount}/${uniqueCategoryIds.size})`);
-            } catch (error) {
-                console.error('Ошибка отправки прогресса:', error.message);
-            }
-        }
+//         if (chatId && (processedCount % 50 === 0 || batchIndex === batches.length - 1)) {
+//             const percent = Math.round((processedCount / uniqueCategoryIds.size) * 100);
+//             try {
+//                 await bot.sendMessage(chatId, `📊 Прогресс: ${percent}% (${processedCount}/${uniqueCategoryIds.size})`);
+//             } catch (error) {
+//                 console.error('Ошибка отправки прогресса:', error.message);
+//             }
+//         }
         
-        if (batchIndex < batches.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
+//         if (batchIndex < batches.length - 1) {
+//             await new Promise(resolve => setTimeout(resolve, 1000));
+//         }
+//     }
     
-    servicesWithCategories.forEach(service => {
-        if (service.category_id && categories.has(service.category_id)) {
-            service.category_name = categories.get(service.category_id);
-        } else {
-            service.category_name = 'Без категории';
-        }
+//     servicesWithCategories.forEach(service => {
+//         if (service.category_id && categories.has(service.category_id)) {
+//             service.category_name = categories.get(service.category_id);
+//         } else {
+//             service.category_name = 'Без категории';
+//         }
+//     });
+    
+//     return servicesWithCategories;
+// }
+
+function addCategoriesToServices(data) {
+    const categoryMap = new Map(
+        data.category.map(cat => [cat.id, cat.title])
+    );
+
+    data.services.forEach(service => {
+        service.category_name = categoryMap.get(service.category_id) || 'Категория не найдена';
     });
-    
-    return servicesWithCategories;
+
+    return data.services;
 }
 
 // Функция для получения категории по ID с кэшированием
@@ -521,34 +536,34 @@ async function createExcelFile(services, companyId) {
     };
     
     services.forEach(service => {
-        let basePriceMin = service.price_min || 0;
-        let basePriceMax = service.price_max || service.price_min || 0;
+        // let basePriceMin = service.price_min || 0;
+        // let basePriceMax = service.price_max || service.price_min || 0;
 
-            if (service.staff && Array.isArray(service.staff) && service.staff.length > 0) {
-            service.staff.forEach(staff => {
-                if (staff.price) {
-                    let staffPriceMax = null;
-                    if (typeof staff.price === 'object' && staff.price !== null) {
-                        staffPriceMax = staff.price.max;
-                    } else if (typeof staff.price === 'string' || typeof staff.price === 'number') {
-                        const parsedPrice = Number(staff.price);
-                        if (!isNaN(parsedPrice)) {
-                            staffPriceMax = parsedPrice;
-                        }
-                    }
+        // if (service.staff && Array.isArray(service.staff) && service.staff.length > 0) {
+        //     service.staff.forEach(staff => {
+        //         if (staff.price) {
+        //             let staffPriceMax = null;
+        //             if (typeof staff.price === 'object' && staff.price !== null) {
+        //                 staffPriceMax = staff.price.max;
+        //             } else if (typeof staff.price === 'string' || typeof staff.price === 'number') {
+        //                 const parsedPrice = Number(staff.price);
+        //                 if (!isNaN(parsedPrice)) {
+        //                     staffPriceMax = parsedPrice;
+        //                 }
+        //             }
                 
-                    if (staffPriceMax !== null && !isNaN(staffPriceMax)) {
-                        const numericPrice = Number(staffPriceMax);
-                        if (numericPrice > basePriceMax) {
-                            basePriceMax = numericPrice;
-                            console.log(`Найдена более высокая цена ${numericPrice} у сотрудника ${staff.name || 'без имени'}`);
-                        }
-                    }
-                }
-            });
-        }
+        //             if (staffPriceMax !== null && !isNaN(staffPriceMax)) {
+        //                 const numericPrice = Number(staffPriceMax);
+        //                 if (numericPrice > basePriceMax) {
+        //                     basePriceMax = numericPrice;
+        //                     console.log(`Найдена более высокая цена ${numericPrice} у сотрудника ${staff.name || 'без имени'}`);
+        //                 }
+        //             }
+        //         }
+        //     });
+        // }
 
-        service.price_max = Number(basePriceMax) || 0;
+        // service.price_max = Number(basePriceMax) || 0;
         worksheet.addRow({
             id: service.id,
             category: service.category_name || 'Без категории',
